@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SMS Spam Detector</title>
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --line:#2a2f3a; --text:#e8eaf0; --muted:#9aa3b2; --accent:#e8590c; --spam:#ef4444; --ham:#22c55e; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { margin: 0 0 4px; font-size: 1.6rem; }
+  p.sub { margin: 0 0 24px; color: var(--muted); }
+  textarea { width:100%; min-height:110px; padding:12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); font:inherit; resize:vertical; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin:12px 0 20px; }
+  button { cursor:pointer; border:0; border-radius:10px; padding:12px 18px; font:inherit; font-weight:600; }
+  #go { background:var(--accent); color:#fff; flex:1; min-width:160px; }
+  #go:disabled { opacity:.6; cursor:wait; }
+  .ex { background:var(--card); color:var(--muted); border:1px solid var(--line); font-weight:500; padding:8px 12px; font-size:.9rem; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  @media (max-width:640px){ .grid { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .card h2 { margin:0 0 8px; font-size:.95rem; color:var(--muted); font-weight:600; }
+  .label { font-size:1.6rem; font-weight:700; }
+  .label.SPAM { color:var(--spam); } .label.HAM { color:var(--ham); }
+  .score { color:var(--muted); }
+  #status { margin:16px 0 0; color:var(--muted); min-height:1.5em; }
+  #status.err { color:var(--spam); }
+  #detail { margin-top:12px; color:var(--muted); font-size:.85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>SMS Spam Detector</h1>
+  <p class="sub">Qwen2.5-0.5B ka base model aur QLoRA fine-tuned model, ek hi SMS par side by side.</p>
+
+  <textarea id="msg" placeholder="Yahan SMS likhein, e.g. Congratulations! You won a free prize. Claim now!"></textarea>
+  <div class="row">
+    <button id="go">Classify SMS</button>
+    <button class="ex" data-t="WIN a free prize, text 80085 now">Spam example</button>
+    <button class="ex" data-t="Hey, are we still meeting for lunch at 1?">Ham example</button>
+  </div>
+
+  <div class="grid">
+    <div class="card"><h2>Base model (zero-shot)</h2><div class="label" id="bl">-</div><div class="score" id="bs"></div></div>
+    <div class="card"><h2>QLoRA fine-tuned model</h2><div class="label" id="fl">-</div><div class="score" id="fs"></div></div>
+  </div>
+  <div id="status"></div>
+  <div id="detail"></div>
+</main>
+
+<script>
+  // Aap ka Hugging Face Space (https://huggingface.co/spaces/Humairaawan/sms-spam-detector)
+  const SPACE = "https://humairaawan-sms-spam-detector.hf.space";
+
+  const $ = id => document.getElementById(id);
+  const go = $("go"), status = $("status");
+
+  document.querySelectorAll(".ex").forEach(b => b.onclick = () => { $("msg").value = b.dataset.t; });
+
+  function show(el, label, score) {
+    $(el + "l").textContent = label;
+    $(el + "l").className = "label " + label;
+    $(el + "s").textContent = "Spam score: " + score;
+  }
+
+  async function classify(message) {
+    const start = await fetch(SPACE + "/gradio_api/call/classify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data: [message] })
+    });
+    if (!start.ok) throw new Error("Space ne request qabool nahi ki (" + start.status + ")");
+    const { event_id } = await start.json();
+
+    const res = await fetch(SPACE + "/gradio_api/call/classify/" + event_id);
+    const text = await res.text();                       // server-sent events, stream khatam hone par poora aata hai
+    const done = text.match(/event: complete\s+data: (.*)/);
+    if (!done) throw new Error("Space se jawab nahi aaya (shayad sleep se jaag rahi hai, dobara try karein)");
+    return JSON.parse(done[1]);
+  }
+
+  go.onclick = async () => {
+    const message = $("msg").value.trim();
+    if (!message) { status.textContent = "Pehle SMS likhein."; status.className = ""; return; }
+    go.disabled = true; status.className = "";
+    status.textContent = "Check ho raha hai... (pehli dafa 30-60 second lag sakte hain)";
+    $("detail").textContent = "";
+    try {
+      const [bLabel, bScore, fLabel, fScore, detail] = await classify(message);
+      show("b", bLabel, bScore);
+      show("f", fLabel, fScore);
+      $("detail").textContent = detail;
+      status.textContent = "";
+    } catch (e) {
+      status.className = "err";
+      status.textContent = "Error: " + e.message;
+    } finally {
+      go.disabled = false;
+    }
+  };
+</script>
+</body>
+</html>
